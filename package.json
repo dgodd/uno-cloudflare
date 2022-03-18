@@ -1,0 +1,7 @@
+{
+  "name": "uno",
+  "description": "Uno",
+  "version": "1.0.0",
+  "module": "./src/chat.mjs",
+  "private": true
+}

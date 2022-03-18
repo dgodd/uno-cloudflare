@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000">
+    <title>Uno</title>
+    <link rel="preload" href="https://uno.goddard.id.au/back.png" as="image" type="image/png">
+    <link rel="preload" href="https://uno.goddard.id.au/deck.svg" as="image" type="image/svg">
+    <link rel="preload" href="https://uno.goddard.id.au/roboto-regular.woff2" as="font">
+    <link rel="shortcut icon" type="image/png" href="https://uno.goddard.id.au/back.png" sizes="175x250">
+    <script type="module">
+      import { h, Component, render } from 'https://unpkg.com/preact@latest?module';
+      import { useState, useEffect } from 'https://unpkg.com/preact@latest/hooks/dist/hooks.module.js?module';
+      import htm from 'https://unpkg.com/htm?module';
+      const html = htm.bind(h);
+      import ReconnectingWebSocket from 'https://unpkg.com/reconnecting-websocket?module'
+
+      function cardName(card) {
+        const color = ["Red", "Yellow", "Green", "Blue"][card % 4]
+        switch(true) {
+          case (card >= 0 && card <= 39):
+            return `${color} ${Math.floor(card/4)}`
+          case (card >= 40 && card <= 43):
+            return `${color} Skip`
+          case (card >= 44 && card <= 47):
+            return `${color} Reverse`
+          case (card >= 48 && card <= 51):
+            return `${color} Draw 2`
+          case (card >= 52 && card <= 55):
+            return "Wild"
+          case (card >= 56 && card <= 59):
+            return "Draw 4"
+          default:
+            return `CARD-${card}`
+        }
+      }
+
+      function Players ({room, current, direction, players, resetFunc}) {
+        const playersHtml = players?.map(([name,num]) => {
+          let dirHtml = ''
+          let active = name === current
+          if (active) {
+            dirHtml = direction ? '⬇ ' : '⬆ '
+          }
+          return html`<div style=${active ? 'color:rgb(153, 255, 102);font-weight:bold' : ''}>${dirHtml}${name} (${num})</div>`
+        })
+
+        return html`<div style='position:absolute;top:1vh;right:1vw;z-index:10;'>
+          <div>Room: ${room}</div>
+          <div style='margin:1em 0'>${playersHtml}</div>
+            <div style='margin:1em 0;'><button onclick=${resetFunc}>reset game</button></div>
+        </div>`
+      }
+
+      function Card({ num, name, margin }) {
+        const x = Math.floor(num / 4) * 100.0 / 13.0
+        const y = (num % 4) * 100.0 / 7.0
+        const nameHtml = name ? html`<span style='position:absolute;background:white;color:black;padding:4px;bottom:0;left:0;'>${name}</span>` : null
+        return html`<span title=${cardName(num)} style='
+          display: inline-block;
+          position: relative;
+          background-image:url(https://uno.goddard.id.au/deck.svg);
+          background-size:1288px 1104px;
+          background-size: calc(38vh * 67 / 100.0 * 14);
+          height: 38vh;
+          aspect-ratio: 66 / 100;
+          margin: 0 ${margin}px;
+          background-position: ${x}% ${y}%;
+        '>${nameHtml}</span>`
+      }
+
+      function App (props) {
+        const [state, setState] = useState({})
+        const [wsSend, setWsSend] = useState(() => x => console.log(`PRE OPEN: ${JSON.stringify(x)}`))
+        const [room, setRoom] = useState('')
+        const [uname, setUname] = useState('')
+        useEffect(() => {
+          if(room.length>0 && uname.length>0) {
+            let u = new URL(window.location.href) // http://localhost:8787/?room=goddard&uname=ross
+            u.protocol = window.location.protocol == 'http:' ? 'ws:' : 'wss:'
+            u.pathname = '/ws'
+            u.searchParams.set('room', room)
+            u.searchParams.set('uname', uname)
+            u.hash = ''
+            const rws = new ReconnectingWebSocket(u.toString());
+            rws.addEventListener('open', () => {
+              setWsSend(() => x => {
+                setState(prevState => { return { ...prevState, latestCard: null } })
+                rws.send(JSON.stringify(x))
+              })
+            })
+            rws.addEventListener('message', ({data}) => {
+              const msg = JSON.parse(data)
+              switch(msg.cmd) {
+                case 'state':
+                  setState(prevState => { return { ...prevState, ...msg.data } })
+                  break
+                case 'latest_card':
+                  setState(prevState => { return { ...prevState, latestCard: msg.data } })
+                  break
+                case 'winner':
+                  setState(prevState => { return { ...prevState, winner: msg.data } })
+                  break
+                case 'error':
+                  alert(msg.data)
+                  break
+              }
+            })
+            return () => { rws.close(); }
+          }
+        }, [window.location.href, setState, setWsSend, room, uname])
+        useEffect(() => {
+          let u = new URL(window.location.href) // http://localhost:8787/?room=goddard&uname=ross
+          setRoom((u.searchParams.get('room') || '').toLowerCase())
+          setUname(u.searchParams.get('uname') || '')
+        }, [window.location.href, setRoom, setUname])
+        const cardWidth = window.innerHeight * 0.38 * 0.66
+        const deckMargin = cardWidth / 4.0 * -1
+        const handMargin = state.hand?.length ? ((cardWidth * state.hand.length) - window.innerWidth + cardWidth) / state.hand.length / 2 * -1 : 0
+        const activeCardIndex = state.hand?.findIndex(x => x === state.latestCard)
+        const bgColor = state.current === uname ? 'purple' : 'green'
+        return html`<div style='position:absolute;top:0;left:0;right:0;bottom:0;background:${bgColor};color:white' onclick=${() => setState(prevState => { return { ...prevState, winner: null } })}>
+          <div style='position:absolute;top:1vh;left:0;right:0;bottom:39%;text-align:center'>
+            ${state.discards?.map(([name,num]) => html`<span style='cursor:pointer' onclick=${() => wsSend({cmd:'undiscard'})}><${Card} num=${num} name=${name} margin=${deckMargin} /></span>`)}
+          </div>
+          <div style='position:absolute;top:1vh;left:1vw;z-index:10'>
+            <img 
+              src="https://uno.goddard.id.au/back.png"
+              style="height: 38vh; border-radius: 10px; box-shadow: rgba(0, 0, 0, 0.8) 0px 0px 30px; border-collapse: collapse; cursor:pointer;"
+              onclick=${() => wsSend({cmd:'pickup'})}
+            />
+            <div style='text-align:center;margin:1em 0;'><button onclick=${() => wsSend({cmd:'pass'})}>pass</button></div>
+          </div>
+          <${Players} room=${room} resetFunc=${() => wsSend({cmd:'reset'})} ...${state} />
+          <div style='position:absolute;top:42%;left:0;right:0;bottom:42%;text-align:center'>
+            ${state.history?.map(txt => html`<div>${txt}</div>`)}
+          </div>
+          <div style='position:absolute;bottom:0;left:0;right:0;top:60%;text-align:center; white-space: nowrap;' title=${activeCardIndex}>
+            ${state.hand?.map((num, index) => html`<span style='cursor:pointer' class=${index === activeCardIndex ? 'activeCard' : null} onclick=${() => wsSend({cmd:'discard',data:num})}>
+              <${Card} num=${num} margin=${handMargin} />
+            </span>`)}
+          </div>
+          <dialog open=${!!state.winner} style="top:46vh;" onclick=${() => setState(prevState => { return { ...prevState, winner: null } })}>
+            <span style="padding:1em">🎆 ${state.winner} won 🎆</span>
+          </dialog>
+          <dialog open=${!(room.length>0 && uname.length>0)} style="top:40vh;font-size:200%;background:lightgreen;">
+            <form method='get' action='/'>
+              <div><label>Room: <input type='text' name='room' defaultValue=${room} style='font-size:100%' /></label></div>
+              <div><label>Name: <input type='text' name='uname' defaultValue=${uname} style='font-size:100%' /></label></div>
+              <div style='text-align:center'><input type='submit' value='Play' style='font-size:200%' /></div>
+            </form>
+          </dialog>
+        </div>`;
+      }
+
+      render(html`<${App} />`, document.body);
+    </script>
+    <style>
+      @font-face {
+        font-family: 'Roboto';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: local('Roboto'), local('Roboto-Regular'), url(https://uno.goddard.id.au/roboto-regular.woff2) format('woff2');
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      body { width: 100%; margin: 0; padding: 0; overflow: hidden; font-family: 'Roboto', sans-serif; font-size: 14px; }
+      .activeCard { position:relative; top:-6vh }
+    </style>
+  </head>
+  <body></body>
+</html>
